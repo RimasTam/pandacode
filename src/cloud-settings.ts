@@ -4,7 +4,7 @@
 import './cloud-settings.css';
 import { escape } from './dom';
 
-export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel'; connected: boolean; detail: string | null; sandboxes?: boolean };
+export type CloudConnection = { provider: 'daytona' | 'cloudflare' | 'aws' | 'vercel' | 'railway'; connected: boolean; detail: string | null; sandboxes?: boolean };
 export type CloudSettingsHost = {
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen(name: 'cloud-setup', callback: (event: { provider: string; label: string }) => void): Promise<() => void>;
@@ -34,6 +34,12 @@ const PROVIDERS: Record<CloudConnection['provider'], { name: string; summary: st
     key: { name: 'key', label: 'Access token', placeholder: 'vercel.com/account/tokens', secret: true },
     fields: [{ name: 'team', label: 'Team slug', placeholder: 'Optional', optional: true }],
     note: 'Agents run the Vercel CLI with this token; it never enters their prompts.', connect: 'Connect',
+  },
+  railway: {
+    name: 'Railway', summary: 'Deploys by agents: servers, containers and databases.',
+    key: { name: 'key', label: 'API token', placeholder: 'railway.com/account/tokens', secret: true },
+    fields: [{ name: 'workspace', label: 'Workspace ID', placeholder: 'Optional; needed for a workspace token', optional: true }],
+    note: 'Use an account token, or a workspace token with its workspace ID. Agents run the Railway CLI with it (fetched on first use if it is not installed); it never enters their prompts.', connect: 'Connect',
   },
 };
 

@@ -93,16 +93,16 @@ export function createPreviewCloud() {
     agentcore: { provider: 'agentcore', os: 'linux', desktop: false, detail: 'AWS AgentCore code interpreter · commands only · ends after an hour', needs: 'aws' },
   };
   let sandboxes = false;
-  const connections = () => (['daytona', 'cloudflare', 'aws', 'vercel'] as const).map(provider => ({ provider, connected: connected.has(provider), detail: connected.get(provider) ?? null, ...(provider === 'cloudflare' ? { sandboxes: connected.has(provider) && sandboxes } : {}) }));
+  const connections = () => (['daytona', 'cloudflare', 'aws', 'vercel', 'railway'] as const).map(provider => ({ provider, connected: connected.has(provider), detail: connected.get(provider) ?? null, ...(provider === 'cloudflare' ? { sandboxes: connected.has(provider) && sandboxes } : {}) }));
   const find = (id: unknown) => { const machine = machines.find(m => m.id === id); if (!machine) throw new Error('Unknown cloud machine.'); return machine; };
   return {
     inputs,
     connections,
     connect(provider: unknown, key: unknown, options: Record<string, unknown>) {
-      if (provider !== 'daytona' && provider !== 'cloudflare' && provider !== 'aws' && provider !== 'vercel') throw new Error('Unknown cloud provider.');
+      if (provider !== 'daytona' && provider !== 'cloudflare' && provider !== 'aws' && provider !== 'vercel' && provider !== 'railway') throw new Error('Unknown cloud provider.');
       if (provider !== 'aws' && (typeof key !== 'string' || !key.trim())) throw new Error('Enter the key.');
       if (key === 'bad') throw new Error(`${provider === 'daytona' ? 'Daytona' : 'Cloudflare'} refused the credentials (HTTP 401). Check them in Settings → Cloud.`);
-      connected.set(provider, provider === 'aws' ? `${options.profile || 'default profile'} · ${options.region}` : provider === 'cloudflare' ? String(options.account) : provider === 'vercel' ? (String(options.team ?? '') || null) : null);
+      connected.set(provider, provider === 'aws' ? `${options.profile || 'default profile'} · ${options.region}` : provider === 'cloudflare' ? String(options.account) : provider === 'vercel' ? (String(options.team ?? '') || null) : provider === 'railway' ? (String(options.workspace ?? '') || null) : null);
       return connections();
     },
     disconnect(provider: unknown) { connected.delete(String(provider)); if (provider === 'cloudflare') sandboxes = false; return connections(); },
