@@ -3,12 +3,14 @@ import { icon } from './dom';
 import type { Device3D, DeviceButton, DeviceShape, ScreenGesture } from './simulator-3d';
 import { chosenFinish, modelSpec, rememberFinish } from './simulator-models';
 
-/* The inspector's iOS Simulator: one device shown as a 3D model with its live
- * screen. Agents reach the same device through the pandacode_simulator_* tools. */
+/* The inspector's iOS Simulator and Android emulators (Android alone on Windows): one
+ * device shown as a 3D model with its live screen. Agents reach the same device through
+ * the pandacode_simulator_* tools. */
 
 export type SimDevice = { udid: string; name: string; runtime: string; state: string; family: 'phone' | 'pad'; deviceType: string; platform?: 'ios' | 'android' };
 export type SimScreen = { width: number; height: number; scale: number; homeButton: boolean };
-export type SimStatus = { available: boolean; axe: boolean; axeInstall: string; android?: boolean; devices: SimDevice[]; selected: string | null; screen: SimScreen | null; error: string | null };
+/** `ios` is false off macOS, where the panel shows Android emulators alone. */
+export type SimStatus = { available: boolean; ios: boolean; axe: boolean; axeInstall: string; android?: boolean; devices: SimDevice[]; selected: string | null; screen: SimScreen | null; error: string | null };
 type Input =
   | { kind: 'tap'; x: number; y: number }
   | { kind: 'longPress'; x: number; y: number; durationMs: number }
@@ -29,11 +31,13 @@ export type AndroidSetup = { step: number; total: number; label: string; done: b
 
 const KEYS: Record<string, string> = { Enter: 'return', Backspace: 'backspace', Tab: 'tab', Escape: 'escape', ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', Delete: 'delete' };
 const TYPE_DELAY = 140, SCROLL_DELAY = 90, SETUP = 'android-setup';
+const STAGE_HELP = 'Click the screen to tap, drag on it to swipe, type to enter text. Drag around the device to turn it.';
+const NO_SDK = "Install Android Studio, or the Android SDK's emulator and platform tools, to use Android emulators.";
 const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
 const isDark = () => document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
 
 export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
-  root.innerHTML = `<div class="sim-stage-wrap"><button type="button" class="sim-reset" data-sim="reset" aria-label="Face forward" title="Face forward">${icon('reset')}</button><div class="sim-stage" tabindex="0" role="application" aria-label="iOS Simulator. Click the screen to tap, drag on it to swipe, type to enter text. Drag around the device to turn it." aria-describedby="sim-hint" title="Drag to turn · Scroll to zoom · Click the screen to tap · Double-click to face forward"></div></div>
+  root.innerHTML = `<div class="sim-stage-wrap"><button type="button" class="sim-reset" data-sim="reset" aria-label="Face forward" title="Face forward">${icon('reset')}</button><div class="sim-stage" tabindex="0" role="application" aria-label="iOS Simulator. ${STAGE_HELP}" aria-describedby="sim-hint" title="Drag to turn · Scroll to zoom · Click the screen to tap · Double-click to face forward"></div></div>
     <p class="sr-only" id="sim-hint">Drag around the device to turn it, scroll to zoom, click the screen to tap, double-click to face forward.</p>
     <p class="sim-status" role="status" hidden></p>
     <div class="sim-axe" role="note" hidden><span>Touch and typing need <strong>AXe</strong>.</span><code></code><button type="button" class="secondary-button" data-sim="copy-axe">${icon('copy')}Copy</button></div>
@@ -88,8 +92,9 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
   }
 
   function render(): void {
-    const chosen = current();
-    root.querySelector('.sim-device-name')!.textContent = chosen?.name ?? (status?.available ? 'No simulators' : 'Simulator');
+    const chosen = current(), androidOnly = status?.ios === false;
+    root.querySelector('.sim-device-name')!.textContent = chosen?.name ?? (androidOnly ? status?.available ? 'No emulators' : 'Emulator' : status?.available ? 'No simulators' : 'Simulator');
+    stage.setAttribute('aria-label', `${androidOnly || chosen?.platform === 'android' ? 'Android emulator' : 'iOS Simulator'}. ${STAGE_HELP}`);
     root.querySelector('.sim-device-runtime')!.textContent = chosen ? `${chosen.runtime} · ${chosen.state === 'Booted' ? 'Running' : chosen.state}` : '';
     button('device').title = chosen ? `${chosen.name} · ${chosen.runtime}` : '';
     const power = button('power');
@@ -106,11 +111,11 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
     button('finish').setAttribute('aria-label', `Device finish: ${look.name}`); button('finish').title = look.name;
     button('finish').disabled = !chosen;
     const axeNote = root.querySelector<HTMLElement>('.sim-axe')!;
-    axeNote.hidden = !status || !status.available || status.axe;
+    axeNote.hidden = !status || !status.ios || !status.available || status.axe;
     axeNote.querySelector('code')!.textContent = status?.axeInstall ?? '';
     if (!status) return;
-    if (!status.available) { say(status.error ?? 'Install Xcode to use the iOS Simulator.'); message('Xcode needed'); return; }
-    if (!chosen) { say('No iOS simulators. Add one in Xcode → Window → Devices and Simulators.'); message(''); return; }
+    if (!status.available) { say(status.error ?? (androidOnly ? NO_SDK : 'Install Xcode to use the iOS Simulator.')); message(androidOnly ? 'Android SDK needed' : 'Xcode needed'); return; }
+    if (!chosen) { say(androidOnly ? 'No Android emulators. Create one in Android Studio → Device Manager.' : 'No iOS simulators. Add one in Xcode → Window → Devices and Simulators.'); message(''); return; }
     say('');
     device?.setShape(shape());
     if (busy) return;
@@ -226,7 +231,8 @@ export function mountSimulator(root: HTMLElement, host: SimulatorHost) {
   function chooseDevice(anchor: HTMLElement): void {
     if (!status) return;
     const items: ChoiceItem[] = status.devices.map(d => ({ id: d.udid, label: d.name, description: `${d.runtime} · ${d.state === 'Booted' ? 'Running' : d.state}`, icon: 'phone', selected: d.udid === status?.selected }));
-    if (!status.android) items.push({ id: SETUP, label: settingUp ? 'Setting up Android…' : 'Set up Android emulator…', description: 'Downloads about 2 GB with Homebrew', icon: 'download', disabled: settingUp });
+    // One-click setup uses Homebrew, so it is offered on macOS only.
+    if (status.ios && !status.android) items.push({ id: SETUP, label: settingUp ? 'Setting up Android…' : 'Set up Android emulator…', description: 'Downloads about 2 GB with Homebrew', icon: 'download', disabled: settingUp });
     if (!items.length) return;
     host.choose(anchor, 'Devices', items, id => {
       if (id === SETUP) { void setupAndroid(); return; }

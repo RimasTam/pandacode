@@ -126,7 +126,8 @@ fn devices(sims: &Simulators) -> Result<Value, String> {
     }
     Ok(json!({
         "shown": status.selected,
-        "touchInput": if status.axe { "available".to_string() } else { format!("missing: install AXe with `{}`", status.axe_install) },
+        // Android takes touches through adb; only the iOS Simulator needs AXe.
+        "touchInput": if status.axe || !status.ios { "available".to_string() } else { format!("missing for iOS: install AXe with `{}`", status.axe_install) },
         "devices": status.devices.iter().map(|d| json!({"udid": d.udid, "name": d.name, "runtime": d.runtime, "state": d.state})).collect::<Vec<_>>(),
     }))
 }
@@ -156,9 +157,10 @@ async fn dispatch(app: tauri::AppHandle, name: String, args: Value) -> Result<Va
     .await
 }
 
-/// Add the simulator tools on macOS; reading is free, acting asks like other host tools.
+/// Add the simulator tools on macOS (iOS and Android) and Windows (Android); reading is free,
+/// acting asks like other host tools.
 pub fn with_simulator(base: Option<ToolHost>, app: tauri::AppHandle, stopped: Arc<AtomicBool>) -> Option<ToolHost> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(any(target_os = "macos", windows)) {
         return base;
     }
     let own = catalog();

@@ -6,6 +6,7 @@ import { isPreviewableFile } from './file-links';
 import type { CommandPanel, GoalState } from './command-center';
 import { createPreviewArchitect } from './preview-architect';
 import { createPreviewCloud, createPreviewVm } from './preview-vm';
+import { isMac } from './platform';
 import { createPreviewTurnChanges } from './preview-turn-changes';
 // Bundled with the preview, not lazily imported: a late module load during a paused test clock stalled startup.
 import { invokeBots } from './preview-bots';
@@ -222,7 +223,9 @@ const previewSimulator = (() => {
   let lastTap: { x: number; y: number } | null = null;
   const screens: Record<string, { width: number; height: number; scale: number; homeButton: boolean }> = { '5B7E': { width: 820, height: 1180, scale: 2, homeButton: false }, '6C1D': { width: 420, height: 912, scale: 3, homeButton: false }, '7D2E': { width: 402, height: 874, scale: 3, homeButton: false }, '8E3F': { width: 1032, height: 1376, scale: 2, homeButton: false }, '9F40': { width: 390, height: 844, scale: 3, homeButton: false }, andr: { width: 412, height: 915, scale: 2.625, homeButton: false } };
   const screenOf = (udid: string | null) => screens[udid?.slice(0, 4) ?? ''] ?? { width: 402, height: 874, scale: 3, homeButton: false };
-  const status = () => ({ available: true, axe: true, axeInstall: 'brew install cameroncooke/axe/axe', android: true, devices: devices.map(d => ({ platform: 'ios', ...d })), selected, screen: selected ? screenOf(selected) : null, error: null });
+  // Like the native side, iOS simulators are listed only on macOS.
+  const ios = isMac;
+  const status = () => ({ available: true, ios, axe: ios, axeInstall: 'brew install cameroncooke/axe/axe', android: true, devices: devices.map(d => ({ platform: 'ios', ...d })).filter(d => ios || d.platform === 'android'), selected, screen: selected ? screenOf(selected) : null, error: null });
   const apps = ['Messages', 'Safari', 'Photos', 'Camera', 'Maps', 'Weather', 'Notes', 'Settings', 'Orbit', 'Music', 'Clock', 'Files'];
   const colors = ['#34c759', '#0a84ff', '#ff9f0a', '#636366', '#30b0c7', '#5ac8fa', '#ffd60a', '#8e8e93', '#ffd43b', '#ff375f', '#1c1c1e', '#007aff'];
   async function frame(udid: string): Promise<ArrayBuffer> {

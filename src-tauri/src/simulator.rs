@@ -9,6 +9,7 @@ pub mod stream;
 pub mod tools;
 mod tree;
 
+use image::{codecs::jpeg::JpegEncoder, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -53,8 +54,10 @@ pub struct Screen {
 #[derive(Debug, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
-    /// Xcode's simulator tools answered.
+    /// Xcode's simulator tools answered, or (where iOS cannot run) the Android SDK is installed.
     pub available: bool,
+    /// The iOS Simulator can run here (macOS only); elsewhere the panel is Android's alone.
+    pub ios: bool,
     pub axe: bool,
     pub axe_install: String,
     /// The Android SDK's emulator is installed.
@@ -146,14 +149,23 @@ pub fn parse_devices(value: &serde_json::Value) -> Vec<Device> {
     devices.sort_by(|a, b| (b.state == "Booted").cmp(&(a.state == "Booted")).then(b.runtime.cmp(&a.runtime)).then(a.name.cmp(&b.name)));
     devices
 }
+/// Xcode, and with it the iOS Simulator, exists only on macOS.
+pub const IOS: bool = cfg!(target_os = "macos");
+
 /// iOS simulators and Android emulators; either platform alone is enough.
 pub fn devices() -> Result<Vec<Device>, String> {
-    let ios = xcrun(&["simctl", "list", "devices", "available", "-j"], QUICK).and_then(|output| json(&output)).map(|value| parse_devices(&value));
-    let android = android::devices();
+    let ios = IOS.then(|| xcrun(&["simctl", "list", "devices", "available", "-j"], QUICK).and_then(|output| json(&output)).map(|value| parse_devices(&value)));
+    listing(ios, android::devices(), android::emulator_path().is_some())
+}
+/// `ios` is `None` where the iOS Simulator cannot run; there an installed SDK without AVDs
+/// is an empty list, not an error.
+fn listing(ios: Option<Result<Vec<Device>, String>>, android: Vec<Device>, sdk: bool) -> Result<Vec<Device>, String> {
     match ios {
-        Ok(mut list) => { list.extend(android); Ok(sort(list)) }
-        Err(_) if !android.is_empty() => Ok(sort(android)),
-        Err(error) => Err(error),
+        Some(Ok(mut list)) => { list.extend(android); Ok(sort(list)) }
+        Some(Err(_)) if !android.is_empty() => Ok(sort(android)),
+        Some(Err(error)) => Err(error),
+        None if android.is_empty() && !sdk => Err(android::MISSING.into()),
+        None => Ok(sort(android)),
     }
 }
 /// Running first, then iOS before Android, newest runtime, then name.
@@ -234,7 +246,7 @@ impl Simulators {
         Ok(screen)
     }
     pub fn status(&self) -> Status {
-        let mut status = Status { axe: axe_path().is_some(), axe_install: AXE_INSTALL.into(), android: android::emulator_path().is_some(), selected: self.selected(), ..Default::default() };
+        let mut status = Status { ios: IOS, axe: IOS && axe_path().is_some(), axe_install: AXE_INSTALL.into(), android: android::emulator_path().is_some(), selected: self.selected(), ..Default::default() };
         match devices() {
             Ok(list) => {
                 status.available = true;
@@ -282,8 +294,7 @@ pub fn screenshot(udid: &str, points: Option<Screen>) -> Result<Vec<u8>, String>
         match android::avd(udid) {
             Some(name) => {
                 let png = android::screenshot(name)?;
-                if points.is_none() || !Path::new("/usr/bin/sips").is_file() { return Ok(png); }
-                std::fs::write(&raw, png).map_err(|e| e.to_string())?;
+                return match points { Some(screen) => jpeg_in_points(&png, screen), None => Ok(png) };
             }
             None => { xcrun(&["simctl", "io", udid, "screenshot", "--type=png", &raw.to_string_lossy()], QUICK)?; }
         }
@@ -302,6 +313,17 @@ pub fn screenshot(udid: &str, points: Option<Screen>) -> Result<Vec<u8>, String>
     let _ = std::fs::remove_file(&raw);
     let _ = std::fs::remove_file(&out);
     result
+}
+
+/// An Android screenshot as a JPEG whose pixels are points, resized here because `sips`
+/// exists only on macOS.
+fn jpeg_in_points(png: &[u8], screen: Screen) -> Result<Vec<u8>, String> {
+    let size = |points: f64| points.round().max(1.0) as u32;
+    let image = image::load_from_memory(png).map_err(|e| format!("The emulator screenshot could not be read: {e}"))?;
+    let image = image.resize_exact(size(screen.width), size(screen.height), FilterType::Triangle);
+    let mut jpeg = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg, 80).encode_image(&image.to_rgb8()).map_err(|e| e.to_string())?;
+    Ok(jpeg)
 }
 
 fn point(value: f64, limit: f64, axis: &str) -> Result<String, String> {
@@ -435,6 +457,29 @@ mod tests {
             "com.apple.CoreSimulator.SimRuntime.watchOS-26-0":[{"udid":"AAAAAAAA-B8C5-4DAC-9425-6A4685BC533E","name":"Watch","state":"Booted","isAvailable":true,"deviceTypeIdentifier":"w"}]}});
         let list = parse_devices(&value);
         assert_eq!(list.iter().map(|d| (d.name.as_str(), d.family.as_str(), d.runtime.as_str())).collect::<Vec<_>>(), vec![("iPad Air", "pad", "iOS 26.2"), ("iPhone 17 Pro", "phone", "iOS 26.2")]);
+    }
+
+    #[test]
+    fn android_alone_fills_the_list_where_ios_cannot_run() {
+        let pixel = || Device { udid: "android:Pixel_9_API_35".into(), name: "Pixel 9 API 35".into(), runtime: "Android 15".into(), state: "Shutdown".into(), family: "phone".into(), device_type: "android:pixel_9".into(), platform: "android".into() };
+        // macOS without Xcode still lists Android emulators; with neither, Xcode's error stands.
+        assert_eq!(listing(Some(Err("Install Xcode".into())), vec![pixel()], true), Ok(vec![pixel()]));
+        assert_eq!(listing(Some(Err("Install Xcode".into())), vec![], false), Err("Install Xcode".into()));
+        // Windows: never Xcode's error, and an SDK without AVDs is an empty list.
+        assert_eq!(listing(None, vec![pixel()], true), Ok(vec![pixel()]));
+        assert_eq!(listing(None, vec![], true), Ok(vec![]));
+        assert_eq!(listing(None, vec![], false), Err(android::MISSING.into()));
+    }
+
+    #[test]
+    fn android_screenshots_shrink_to_points_without_sips() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(1080, 2400, image::Rgba([20, 120, 220, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let jpeg = jpeg_in_points(&png, Screen { width: 411.4, height: 914.3, scale: 2.625, home_button: false }).unwrap();
+        let shrunk = image::load_from_memory(&jpeg).unwrap();
+        assert_eq!((shrunk.width(), shrunk.height()), (411, 914));
+        assert!(jpeg.starts_with(&[0xff, 0xd8]), "a JPEG, as the agent tools label it");
+        assert!(jpeg_in_points(b"not a png", Screen { width: 1.0, height: 1.0, scale: 1.0, home_button: false }).is_err());
     }
 
     #[test]

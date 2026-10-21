@@ -56,7 +56,7 @@ import { createPullView } from './github-pull';
 import { createTokenSaver } from './token-saver-panel';
 import { MAX_IMAGES, mountPromptAttachments, type PromptImage } from './attachments';
 import { compactSublines, infoMark, installTooltips } from './tooltip';
-import { isMac, shortcut } from './platform';
+import { isMac, isWindows, shortcut } from './platform';
 import { createGoalBanner, showGoalDialog, showCommandCenter, type GoalState, type GoalAction, type CommandPanel } from './command-center';
 import { teamActive, type TeamSnapshot, type TeamEvent, type TeamLibrary, type TeamConfig, type WorkerProfile } from './architect-types';
 import type { ArchitectView } from './architect';
@@ -119,6 +119,8 @@ let activityTimer = 0;
 let workTimer = 0;
 let browserPanel: BrowserPanel | undefined, browserWanted = false;
 let simulatorPanel: ReturnType<typeof import('./simulator').mountSimulator> | undefined, simulatorLoading: Promise<void> | undefined;
+/** iOS simulators and Android emulators on macOS; Android emulators alone on Windows. */
+const SIMULATORS = isMac || isWindows;
 let vmPanel: ReturnType<typeof import('./vm-panel').mountVmPanel> | undefined, vmLoading: Promise<void> | undefined;
 let browserLifecycle = Promise.resolve();
 let browserOwner = '', browserRevision = 0, inspectorSuppressed = false;
@@ -271,7 +273,7 @@ $app.innerHTML = `<div class="workspace">
     <div id="terminal-drawer" class="terminal-drawer" hidden><div class="drawer-heading"><span>${icon('terminal')}<span id="terminal-project" class="muted"></span></span><div class="terminal-tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-heading-actions"><button class="icon-button" data-terminal-action="new" aria-label="New terminal" title="New terminal">${icon('plus')}</button><button class="icon-button" data-terminal-action="minimize" aria-label="Minimize terminal" title="Minimize terminal">${icon('minimize')}</button><button class="icon-button" data-terminal-action="close" aria-label="Close terminal" title="Close terminal" aria-haspopup="dialog">${icon('close')}</button></div></div><div id="terminal-host"></div></div>
   </main>
   <section id="settings-page" aria-label="Settings" hidden></section>
-  <aside id="inspector" class="inspector" aria-label="Project inspector"><header class="inspector-heading"><div class="inspector-tabs"><button class="selected" data-action="tab-changes">Changes <span id="changes-count"></span></button><button data-action="tab-files">Files</button><button data-action="browser">Browser</button><button data-action="tab-pull" hidden>PR</button><button data-action="tab-simulator" aria-label="Simulators" title="iOS & Android simulators" ${isMac ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button></div>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section></aside>
+  <aside id="inspector" class="inspector" aria-label="Project inspector"><header class="inspector-heading"><div class="inspector-tabs"><button class="selected" data-action="tab-changes">Changes <span id="changes-count"></span></button><button data-action="tab-files">Files</button><button data-action="browser">Browser</button><button data-action="tab-pull" hidden>PR</button><button data-action="tab-simulator" aria-label="Simulators" title="${isMac ? 'iOS & Android simulators' : 'Android emulators'}" ${SIMULATORS ? '' : 'hidden'}>${icon('phone')}</button><button data-action="tab-vm" aria-label="Virtual machines" title="Virtual machines" ${isMac ? '' : 'hidden'}>${icon('monitor')}</button></div>${button('refresh-inspector', 'Refresh project', 'refresh')}</header><div id="inspector-content" class="inspector-content"></div><section id="browser-panel" class="browser-panel" aria-label="Browser" hidden></section><section id="simulator-panel" class="simulator-panel" aria-label="Simulators" hidden></section><section id="vm-panel" class="vm-panel" aria-label="Virtual machines" hidden></section></aside>
 </div><div id="toast" class="toast" role="status" hidden></div><dialog id="dialog"></dialog>`;
 publishSpringEasings();
 installDialogMotion(document.querySelector<HTMLDialogElement>('#dialog')!);
@@ -2355,7 +2357,7 @@ async function refreshInspector(): Promise<void> {
 }
 /** The simulator panel stays mounted once opened; hiding it stops its frames. */
 function syncSimulatorPanel(): void {
-  const wanted = isMac && state.inspector && state.inspectorTab === 'simulator' && !inspectorSuppressed;
+  const wanted = SIMULATORS && state.inspector && state.inspectorTab === 'simulator' && !inspectorSuppressed;
   $('#simulator-panel').hidden = !wanted;
   if (wanted) { $('#inspector-content').hidden = true; $('.inspector-heading>[data-action="refresh-inspector"]').hidden = true; }
   if (!wanted) { simulatorPanel?.hide(); return; }
