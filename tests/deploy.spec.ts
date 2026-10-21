@@ -57,6 +57,21 @@ test('deploy offers connected platforms and starts a task with the brief', async
   expect(sent.text).not.toContain('vcp_token');
 });
 
+test('Railway connects with a workspace and starts a deploy task', async ({ page }) => {
+  await open(page);
+  await connect(page, 'Railway', { 'API token': 'railway_token', 'Workspace ID': 'ws-1' });
+  expect((await calls(page, 'cloud_connect')).at(-1)).toEqual({ provider: 'railway', key: 'railway_token', options: { workspace: 'ws-1' } });
+  await expect(settings(page).locator('.cloud-provider[data-provider="railway"]')).toContainText('Connected · ws-1');
+  await settings(page).getByRole('button', { name: 'Back to the workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Deploy', exact: true }).click();
+  await page.getByRole('menu', { name: 'Deploy' }).getByRole('menuitem', { name: 'Deploy to Railway' }).click();
+  await expect.poll(async () => (await calls(page, 'send_message')).length).toBe(1);
+  const sent = (await calls(page, 'send_message'))[0];
+  expect(sent.text).toMatch(/^Deploy this project to Railway\./);
+  expect(sent.text).toContain('up --ci');
+  expect(sent.text).not.toContain('railway_token');
+});
+
 test('Cloudflare connects for deploys first and sets up container sandboxes separately', async ({ page }) => {
   await open(page);
   await connect(page, 'Cloudflare', { 'API token': 'cf_token', 'Account ID': '0123456789abcdef0123456789abcdef' });

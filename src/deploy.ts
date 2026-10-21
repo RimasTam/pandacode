@@ -1,12 +1,13 @@
 /* Deploy: a header menu that starts an agent task to ship the project to Vercel,
- * Cloudflare or AWS end to end. The agent deploys with the pandacode_cloud_cli tool,
+ * Cloudflare, Railway or AWS end to end. The agent deploys with the pandacode_cloud_cli tool,
  * which is already signed in, so no keys appear in prompts. */
 import type { CloudConnection } from './cloud-settings';
 
-export type DeployTarget = 'vercel' | 'cloudflare' | 'aws';
+export type DeployTarget = 'vercel' | 'cloudflare' | 'railway' | 'aws';
 export const TARGETS: { id: DeployTarget; label: string; description: string }[] = [
   { id: 'vercel', label: 'Deploy to Vercel', description: 'Preview first, then production' },
   { id: 'cloudflare', label: 'Deploy to Cloudflare', description: 'Workers, static assets or Pages' },
+  { id: 'railway', label: 'Deploy to Railway', description: 'Servers, containers and databases' },
   { id: 'aws', label: 'Deploy to AWS', description: 'The simplest fitting AWS service' },
 ];
 
@@ -15,6 +16,7 @@ const COMMON = `Work end to end and verify the result yourself. Use the pandacod
 const BRIEFS: Record<DeployTarget, string> = {
   vercel: `Deploy this project to Vercel.\n\n${COMMON}\n\nWith tool "vercel": run \`deploy --yes\` for a preview, check it, then \`deploy --prod --yes\` for production. Let Vercel detect the framework; add a minimal vercel.json only if it is needed. Add environment variables with \`env add\` if I give you values.`,
   cloudflare: `Deploy this project to Cloudflare.\n\n${COMMON}\n\nWith tool "wrangler": for a static site or a frontend build, prefer a Worker with static assets (a wrangler.jsonc with "assets": {"directory": "<build output>"}); for an API or full-stack app, a Worker with the right compatibility flags (nodejs_compat when Node APIs are used). Run \`deploy\` and report the workers.dev URL. Use Pages (\`pages deploy <dir> --project-name <name>\`) only if the project is already set up for it.`,
+  railway: `Deploy this project to Railway.\n\n${COMMON}\n\nWith tool "railway": if the checkout is not linked yet, run \`init --name <project>\` (it links this folder), then \`up --ci\` to build and deploy, and \`domain\` to give the service a public railway.app URL. Let Railway's builder detect the stack; add a minimal railway.json only if the start command or build needs it. If the app needs a database, add it with \`add --database postgres\` and use the variable Railway provides. Set variables with \`variable set KEY=value\` only for values I give you, and never print variable values. Check \`logs\` and \`status\` if the deploy fails. Do not delete existing projects or services.`,
   aws: `Deploy this project to AWS.\n\n${COMMON}\n\nWith tool "aws": choose the simplest fitting service and say why before creating anything: a static site goes to S3 behind CloudFront; a container or server app to App Runner (build and push the image to ECR first) or Lambda for small functions. Tag everything you create with pandacode=deploy, keep it in the configured region, prefer the free tier, and tell me the expected monthly cost before creating anything that is not free. Do not delete existing resources.`,
 };
 

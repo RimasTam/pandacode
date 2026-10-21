@@ -57,6 +57,8 @@ pub struct Settings {
     pub aws_region: Option<String>,
     /// Vercel team slug for deploys, when not the personal account.
     pub vercel_team: Option<String>,
+    /// Railway workspace for new projects, when the token reaches more than one.
+    pub railway_workspace: Option<String>,
 }
 pub fn settings() -> Settings {
     secret_store::get(SERVICE, "settings").and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
