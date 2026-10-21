@@ -3,6 +3,7 @@
 //! keys, `uiautomator` for the screen's elements, and `am`/`pm` for apps.
 //! Devices are named `android:<AVD>`; coordinates are dp, the unit taps use here.
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -16,6 +17,8 @@ const OUTPUT_LIMIT: usize = 24 * 1024 * 1024;
 const QUICK: Duration = Duration::from_secs(20);
 const BOOT: Duration = Duration::from_secs(300);
 const MAX_TEXT: usize = 2000;
+/// Where the iOS Simulator cannot run, a missing SDK is the only reason for an empty list.
+pub const MISSING: &str = "Install Android Studio, or the Android SDK's emulator and platform tools, to use Android emulators.";
 
 /// The SDK root: environment first, then Android Studio's and Homebrew's defaults.
 pub fn sdk_root() -> Option<PathBuf> {
@@ -60,20 +63,51 @@ pub fn valid_name(name: &str) -> bool {
 /// API level → Android version, for the device list.
 pub fn android_version(api: u32) -> String {
     match api {
-        36 => "16".into(), 35 => "15".into(), 34 => "14".into(), 33 => "13".into(), 32 | 31 => "12".into(), 30 => "11".into(), 29 => "10".into(),
+        37 => "17".into(), 36 => "16".into(), 35 => "15".into(), 34 => "14".into(), 33 => "13".into(), 32 | 31 => "12".into(), 30 => "11".into(), 29 => "10".into(),
         28 => "9".into(), 27 => "8.1".into(), 26 => "8".into(), other => format!("API {other}"),
     }
 }
+fn ini_value(text: &str, key: &str) -> Option<String> {
+    text.lines().find_map(|line| line.split_once('=').filter(|(k, _)| k.trim() == key).map(|(_, v)| v.trim().to_string())).filter(|v| !v.is_empty())
+}
 /// An AVD's `config.ini`: device profile, API level and whether it is a tablet.
 pub fn parse_config(config: &str) -> (String, Option<u32>, bool) {
-    let value = |key: &str| config.lines().find_map(|line| line.split_once('=').filter(|(k, _)| k.trim() == key).map(|(_, v)| v.trim().to_string()));
+    let value = |key: &str| ini_value(config, key);
     let device = value("hw.device.name").unwrap_or_default();
-    let api = value("image.sysdir.1").and_then(|dir| dir.split(['/', '\\']).find_map(|part| part.strip_prefix("android-")?.parse().ok()));
+    // `android-35`, or `android-37.0` for images with minor versions.
+    let api = value("image.sysdir.1").and_then(|dir| dir.split(['/', '\\']).find_map(|part| part.strip_prefix("android-")?.split('.').next()?.parse().ok()));
     let tablet = device.contains("tablet") || value("hw.lcd.width").zip(value("hw.lcd.height")).and_then(|(w, h)| Some(w.parse::<u32>().ok()?.min(h.parse::<u32>().ok()?) >= 1500)).unwrap_or(false);
     (device, api, tablet)
 }
-fn avd_home() -> Option<PathBuf> {
-    std::env::var_os("ANDROID_AVD_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".android/avd")))
+/// Where AVDs live, as the SDK tools look: `ANDROID_AVD_HOME`, `ANDROID_USER_HOME/avd`, then
+/// `.android/avd` in the user's home, which on Windows is `USERPROFILE` (apps started from
+/// Explorer usually have no `HOME`).
+pub fn avd_home_in(var: impl Fn(&str) -> Option<OsString>, windows: bool) -> Option<PathBuf> {
+    let dir = |name: &str| var(name).filter(|value| !value.is_empty()).map(PathBuf::from);
+    if let Some(avd) = dir("ANDROID_AVD_HOME") {
+        return Some(avd);
+    }
+    if let Some(user) = dir("ANDROID_USER_HOME") {
+        return Some(user.join("avd"));
+    }
+    let home = if windows { dir("USERPROFILE").or_else(|| dir("HOME")) } else { dir("HOME") };
+    home.map(|home| home.join(".android").join("avd"))
+}
+fn avd_home() -> Option<PathBuf> { avd_home_in(|name| std::env::var_os(name), cfg!(windows)) }
+/// Folders that may hold an AVD, best first: the `path=` and `path.rel=` of its `<name>.ini`
+/// (an AVD renamed in Android Studio keeps its old folder), then `<name>.avd`.
+pub fn avd_folders(home: &Path, name: &str, pointer: &str) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = ini_value(pointer, "path").map(PathBuf::from).into_iter().collect();
+    if let (Some(relative), Some(user_home)) = (ini_value(pointer, "path.rel"), home.parent()) {
+        folders.push(user_home.join(relative));
+    }
+    folders.push(home.join(format!("{name}.avd")));
+    folders
+}
+fn avd_config(name: &str) -> String {
+    let Some(home) = avd_home() else { return String::new() };
+    let pointer = std::fs::read_to_string(home.join(format!("{name}.ini"))).unwrap_or_default();
+    avd_folders(&home, name, &pointer).into_iter().find_map(|folder| std::fs::read_to_string(folder.join("config.ini")).ok()).unwrap_or_default()
 }
 
 /// Running emulator serials and the AVD each one runs.
@@ -105,8 +139,7 @@ pub fn devices() -> Vec<Device> {
         .map(str::trim)
         .filter(|name| valid_name(name))
         .map(|name| {
-            let config = avd_home().and_then(|home| std::fs::read_to_string(home.join(format!("{name}.avd/config.ini"))).ok()).unwrap_or_default();
-            let (profile, api, tablet) = parse_config(&config);
+            let (profile, api, tablet) = parse_config(&avd_config(name));
             Device {
                 udid: format!("{PREFIX}{name}"),
                 name: pretty(name),
@@ -142,11 +175,16 @@ pub fn boot(name: &str) -> Result<(), String> {
     }
     let emulator = emulator_path().ok_or("Install the Android emulator to boot this device.")?;
     // The emulator keeps running after this returns; it is not a child we wait on.
-    Command::new(emulator)
+    let mut command = Command::new(emulator);
+    command
         .args(["-avd", name, "-no-window", "-no-audio", "-no-boot-anim", "-gpu", "auto"])
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("Could not start the Android emulator: {error}"))?;
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW: emulator.exe is a console program.
+    }
+    command.spawn().map_err(|error| format!("Could not start the Android emulator: {error}"))?;
     let started = Instant::now();
     while started.elapsed() < BOOT {
         if let Ok(serial) = serial(name) {
@@ -329,6 +367,37 @@ mod tests {
         assert_eq!(parse_config("hw.device.name=pixel_tablet\nimage.sysdir.1=system-images\\android-34\\google_apis\\x86_64\\"), ("pixel_tablet".into(), Some(34), true));
         assert_eq!(android_version(35), "15");
         assert_eq!(android_version(40), "API 40");
+        // Android Studio's Medium Phone on Windows, as written by its Device Manager.
+        let medium = "hw.device.name=medium_phone\nhw.lcd.height=2400\nhw.lcd.width=1080\nimage.sysdir.1=system-images\\android-37.0\\google_apis_playstore\\x86_64\\\n";
+        assert_eq!(parse_config(medium), ("medium_phone".into(), Some(37), false));
+        assert_eq!(android_version(37), "17");
+    }
+
+    #[test]
+    fn avd_home_follows_the_sdk_and_windows_profiles() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| OsString::from(*v));
+        let home = |parts: &[&str]| parts.iter().collect::<PathBuf>();
+        // Apps started from Explorer have USERPROFILE but usually no HOME.
+        assert_eq!(avd_home_in(env(&[("USERPROFILE", "C:/Users/me")]), true), Some(home(&["C:/Users/me", ".android", "avd"])));
+        assert_eq!(avd_home_in(env(&[("USERPROFILE", "C:/Users/me"), ("HOME", "/c/Users/me")]), true), Some(home(&["C:/Users/me", ".android", "avd"])));
+        assert_eq!(avd_home_in(env(&[("HOME", "/Users/me"), ("USERPROFILE", "")]), false), Some(home(&["/Users/me", ".android", "avd"])));
+        assert_eq!(avd_home_in(env(&[("USERPROFILE", "C:/Users/me")]), false), None);
+        assert_eq!(avd_home_in(env(&[("ANDROID_USER_HOME", "D:/android"), ("HOME", "/Users/me")]), false), Some(home(&["D:/android", "avd"])));
+        assert_eq!(avd_home_in(env(&[("ANDROID_AVD_HOME", "D:/avds"), ("ANDROID_USER_HOME", "D:/android")]), true), Some(PathBuf::from("D:/avds")));
+        assert_eq!(avd_home_in(env(&[("ANDROID_AVD_HOME", ""), ("HOME", "/Users/me")]), false), Some(home(&["/Users/me", ".android", "avd"])));
+    }
+
+    #[test]
+    fn renamed_avds_are_found_through_their_pointer_file() {
+        let avd = Path::new("/Users/me/.android/avd");
+        // Android Studio renamed Medium_Phone to Medium_Phone_API_37.0 and kept the folder.
+        let pointer = "avd.ini.encoding=UTF-8\npath=/Users/me/.android/avd/Medium_Phone.avd\npath.rel=avd/Medium_Phone.avd\ntarget=android-37.0\n";
+        assert_eq!(avd_folders(avd, "Medium_Phone_API_37.0", pointer), vec![
+            PathBuf::from("/Users/me/.android/avd/Medium_Phone.avd"),
+            Path::new("/Users/me/.android").join("avd/Medium_Phone.avd"),
+            avd.join("Medium_Phone_API_37.0.avd"),
+        ]);
+        assert_eq!(avd_folders(avd, "Pixel_9_API_35", ""), vec![avd.join("Pixel_9_API_35.avd")]);
     }
 
     #[test]

@@ -5,7 +5,12 @@ import { expect, test, type Page } from '@playwright/test';
 const calls = (page: Page, command: string): Promise<any[]> => page.evaluate(command => ((window as any).__simCalls ?? []).filter((entry: any) => entry.command === command), command);
 const inputs = async (page: Page) => (await calls(page, 'simulator_input')).map(entry => entry.args.input);
 
-async function open(page: Page): Promise<void> {
+/** The tab and the preview's device list follow the host: iOS and Android on macOS, Android alone on Windows. */
+async function asPlatform(page: Page, platform: 'MacIntel' | 'Win32'): Promise<void> {
+  await page.addInitScript(value => Object.defineProperty(Navigator.prototype, 'platform', { get: () => value }), platform);
+}
+async function open(page: Page, platform: 'MacIntel' | 'Win32' = 'MacIntel'): Promise<void> {
+  await asPlatform(page, platform);
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch();
     const source = await response.text();
@@ -166,6 +171,7 @@ test('Android emulators sit beside iOS simulators with Back and Recents', async 
 });
 
 test('Android can be set up in one click when the SDK is missing', async ({ page }) => {
+  await asPlatform(page, 'MacIntel');
   await page.route('**/src/preview.ts*', async route => {
     const response = await route.fetch();
     const source = await response.text();
@@ -181,6 +187,7 @@ test('Android can be set up in one click when the SDK is missing', async ({ page
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
+  await expect(page.locator('.task-item.selected')).toBeVisible();
   await showSimulator(page);
   const panel = page.locator('#simulator-panel');
   await panel.getByRole('button', { name: 'Choose simulator' }).click();
@@ -190,3 +197,53 @@ test('Android can be set up in one click when the SDK is missing', async ({ page
   await expect(page.locator('#toast')).toContainText('Android emulator ready');
   await expect(panel.locator('.sim-device-name')).toHaveText('Pixel 9 API 35');
 });
+
+test('on Windows the tab shows Android emulators alone, with no Xcode or AXe', async ({ page }) => {
+  await open(page, 'Win32');
+  const tab = page.locator('.inspector-tabs [data-action="tab-simulator"]');
+  await expect(tab).toHaveAttribute('title', 'Android emulators');
+  await showSimulator(page);
+  const panel = page.locator('#simulator-panel');
+  await expect(panel.locator('.sim-device-name')).toHaveText('Pixel 9 API 35');
+  await expect(panel.locator('.sim-device-runtime')).toHaveText('Android 15 · Shutdown');
+  await expect(panel.locator('.sim-stage')).toHaveAttribute('aria-label', /^Android emulator\. /);
+  await expect(panel.locator('.sim-axe')).toBeHidden();
+  await expect(panel).not.toContainText('Xcode');
+  // Only Android devices, and no Homebrew setup to offer.
+  await panel.getByRole('button', { name: 'Choose simulator' }).click();
+  await expect(page.getByRole('menuitemradio')).toHaveCount(1);
+  await expect(page.getByRole('menuitemradio', { name: /Set up Android emulator/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await panel.getByRole('button', { name: 'Boot simulator' }).click();
+  await expect(panel.locator('.sim-device-runtime')).toHaveText('Android 15 · Running');
+  await expect(panel.getByRole('button', { name: 'Back', exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect.poll(async () => (await inputs(page)).map(input => input.button)).toEqual(['home']);
+  await expect.poll(() => page.evaluate(() => (window as any).__simFrames ?? 0)).toBeGreaterThan(0);
+});
+
+for (const [name, native, expected] of [
+  ['an SDK without emulators', { available: true, android: true, devices: [], selected: null, screen: null, error: null }, 'No Android emulators. Create one in Android Studio → Device Manager.'],
+  // What the native side reports on Windows when neither the emulator nor adb is installed.
+  ['no Android SDK', { available: false, android: false, devices: [], selected: null, screen: null, error: "Install Android Studio, or the Android SDK's emulator and platform tools, to use Android emulators." }, /Install Android Studio/],
+] as const) {
+  test(`on Windows ${name} points to Android Studio, not Xcode`, async ({ page }) => {
+    await asPlatform(page, 'Win32');
+    await page.route('**/src/preview.ts*', async route => {
+      const response = await route.fetch();
+      const source = await response.text();
+      await route.fulfill({ response, body: source.replace(/switch\s*\(command\)\s*\{/, `
+        if (command === 'simulator_status' || command === 'simulator_select') return { ...previewSimulator.status(), ...${JSON.stringify(native)} };
+        switch (command) {
+      `) });
+    });
+    await page.goto('/');
+    await expect(page.locator('.task-item.selected')).toBeVisible();
+    await showSimulator(page);
+    const panel = page.locator('#simulator-panel');
+    await expect(panel.locator('.sim-status')).toHaveText(expected);
+    await expect(panel.locator('.sim-device-name')).toHaveText(native.available ? 'No emulators' : 'Emulator');
+    await expect(panel.locator('.sim-axe')).toBeHidden();
+    await expect(panel).not.toContainText('Xcode');
+  });
+}
