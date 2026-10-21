@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { root, version, json } from './common.mjs';
+import { root, version, json, cargoLockVersion } from './common.mjs';
 
 const next = version(process.argv[2]);
 for (const path of ['package.json', 'package-lock.json', 'src-tauri/tauri.conf.json']) {
@@ -15,7 +15,7 @@ const cargo = await readFile(cargoPath, 'utf8');
 await writeFile(cargoPath, cargo.replace(/(\[package\][\s\S]*?\nversion = )"[^"]+"/, `$1"${next}"`));
 const lockPath = resolve(root, 'src-tauri/Cargo.lock');
 const lock = await readFile(lockPath, 'utf8');
-await writeFile(lockPath, lock.replace(/(\[\[package\]\]\nname = "pandacode"\nversion = )"[^"]+"/, `$1"${next}"`));
+await writeFile(lockPath, cargoLockVersion(lock, next));
 // The website changelog (/changelog) dates each release from this map.
 const datesPath = resolve(root, 'website/src/data/release-dates.json');
 const dates = await json(datesPath);

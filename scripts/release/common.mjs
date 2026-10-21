@@ -50,6 +50,14 @@ export function version(value) {
 
 export async function json(path) { return JSON.parse(await readFile(path, 'utf8')); }
 
+/** Cargo.lock text with the `pandacode` package at `next`. Keeps the file's line endings,
+ * so a Windows checkout with CRLF is updated too, and fails instead of leaving it unchanged. */
+export function cargoLockVersion(lock, next) {
+  const entry = /(\[\[package\]\]\r?\nname = "pandacode"\r?\nversion = )"[^"]+"/;
+  if (!entry.test(lock)) throw new Error('No pandacode package in src-tauri/Cargo.lock.');
+  return lock.replace(entry, `$1"${version(next)}"`);
+}
+
 export async function digest(path) {
   const sha = createHash('sha256');
   for await (const chunk of createReadStream(path)) sha.update(chunk);
@@ -69,14 +77,17 @@ export function releaseDirectory(releaseVersion) {
 }
 
 /** The release's updater manifest for the in-app updater: each platform's signed file and
- * its signature. `signatures` maps release targets to the contents of their `.sig` files. */
-export function updaterManifest(releaseVersion, notes, signatures, pubDate = new Date().toISOString()) {
+ * its signature. `signatures` maps release targets to the contents of their `.sig` files.
+ * Files are on the repository that publishes the release (GITHUB_REPOSITORY in Actions),
+ * so a fork's release points at its own assets. */
+export function updaterManifest(releaseVersion, notes, signatures, pubDate = new Date().toISOString(), repository = process.env.GITHUB_REPOSITORY || 'aicodeking/pandacode') {
   const v = version(releaseVersion);
+  if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository)) throw new Error(`Not a GitHub repository: ${repository}`);
   const platforms = {};
   for (const [target, signature] of Object.entries(signatures)) {
     const config = targetConfig(target);
     if (typeof signature !== 'string' || !signature.trim()) throw new Error(`Missing updater signature for ${target}.`);
-    platforms[target] = { signature: signature.trim(), url: `https://github.com/aicodeking/pandacode/releases/download/v${v}/${config.updaterAsset}` };
+    platforms[target] = { signature: signature.trim(), url: `https://github.com/${repository}/releases/download/v${v}/${config.updaterAsset}` };
   }
   if (!Object.keys(platforms).length) throw new Error('No signed updater files to publish.');
   return { version: v, notes: String(notes ?? '').trim(), pub_date: pubDate, platforms };
