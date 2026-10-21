@@ -32,7 +32,7 @@ test('missing variables fail without revealing other values', () => {
 
 test('the updater manifest points every signed platform at its release asset', async () => {
   const { updaterManifest } = await import('./common.mjs');
-  const manifest = updaterManifest('0.3.1', ' Notes \n', { 'darwin-aarch64': 'sig-mac\n', 'linux-x86_64': 'sig-linux' }, '2026-10-18T00:00:00Z');
+  const manifest = updaterManifest('0.3.1', ' Notes \n', { 'darwin-aarch64': 'sig-mac\n', 'linux-x86_64': 'sig-linux' }, '2026-10-18T00:00:00Z', 'aicodeking/pandacode');
   assert.deepEqual(manifest, {
     version: '0.3.1', notes: 'Notes', pub_date: '2026-10-18T00:00:00Z',
     platforms: {
@@ -42,4 +42,7 @@ test('the updater manifest points every signed platform at its release asset', a
   });
   assert.throws(() => updaterManifest('0.3.1', '', {}), /No signed updater files/);
   assert.throws(() => updaterManifest('0.3.1', '', { 'windows-x86_64': ' ' }), /Missing updater signature/);
+  const fork = updaterManifest('0.3.1', '', { 'windows-x86_64': 'sig-win' }, '2026-10-18T00:00:00Z', 'someone/pandacode');
+  assert.equal(fork.platforms['windows-x86_64'].url, 'https://github.com/someone/pandacode/releases/download/v0.3.1/PandaCode-Windows-x64-setup.exe');
+  assert.throws(() => updaterManifest('0.3.1', '', { 'windows-x86_64': 'sig' }, undefined, 'evil.example/x?y'), /Not a GitHub repository/);
 });
