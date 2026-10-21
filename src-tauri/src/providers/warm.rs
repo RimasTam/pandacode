@@ -128,7 +128,8 @@ pub async fn prewarm(mut config: RunConfig, tools: Vec<Value>, approval_tools: H
     Ok(())
 }
 
-#[cfg(test)]
+// Only the Unix-only test below asks.
+#[cfg(all(test, unix))]
 pub(super) fn waiting(session_id: &str) -> bool {
     spares().contains_key(session_id)
 }
